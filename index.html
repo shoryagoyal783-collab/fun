@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two-Team Points Game</title>
+<style>
+:root{font-family:system-ui,Arial,sans-serif;color:#172033;background:#f3f5fa}
+*{box-sizing:border-box}body{margin:0;padding:20px}.wrap{max-width:900px;margin:auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-size:clamp(25px,5vw,38px);margin:8px 0} .tag{background:#e4e9ff;color:#3546a5;padding:7px 12px;border-radius:99px;font-size:13px}
+.card{background:white;border:1px solid #e2e6ef;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 5px 20px #18264b0a}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+label{display:block;font-weight:650;font-size:14px;margin:10px 0 6px}
+input{width:100%;padding:12px;border:1px solid #cbd2df;border-radius:10px;font:inherit}
+button{border:0;border-radius:10px;padding:11px 15px;font:inherit;font-weight:700;cursor:pointer;background:#263d9b;color:white;margin:5px 5px 5px 0}
+button.secondary{background:#e9edfa;color:#24336e}button:disabled{opacity:.45;cursor:not-allowed}
+.hidden{display:none!important}.muted{color:#667085}.big{font-size:30px;font-weight:800}
+.team{border:2px solid #dfe4ee;border-radius:14px;padding:14px}.team.a{border-color:#91a7ff}.team.b{border-color:#f2a6a6}
+.player{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid #edf0f5}
+.pill{font-size:12px;padding:3px 8px;border-radius:20px;background:#edf0f7}
+#message{min-height:24px;color:#a12b2b;font-weight:600}.good{color:#167447!important}
+code{font-size:1.15em;letter-spacing:2px}.history li{margin:7px 0}
+footer{font-size:12px;color:#697386;text-align:center;margin:22px}
+</style>
+</head>
+<body><main class="wrap">
+<header><h1>Two-Team Points Game</h1><span class="tag">Virtual points · Live multiplayer</span></header>
+<p class="muted">Create a room, invite friends with the room code, pick teams and play rounds together.</p>
+<section id="lobby" class="card">
+ <div class="grid">
+  <div><h2>Create a room</h2>
+   <label>Your name</label><input id="createName" maxlength="22" placeholder="Your name">
+   <label>Starting points per player</label><input id="starting" type="number" min="1" max="1000000" value="1000">
+   <button id="createBtn">Create room</button>
+  </div>
+  <div><h2>Join a room</h2>
+   <label>Your name</label><input id="joinName" maxlength="22" placeholder="Your name">
+   <label>Room code</label><input id="roomCodeInput" maxlength="6" placeholder="e.g. A1B2C3" style="text-transform:uppercase">
+   <button id="joinBtn">Join room</button>
+  </div>
+ </div>
+</section>
+
+<section id="game" class="hidden">
+ <div class="card">
+  <div class="grid">
+   <div><span class="muted">Room code — share with friends</span><div class="big"><code id="roomCode"></code></div><button class="secondary" id="copyCode">Copy code</button></div>
+   <div><span class="muted">Round</span><div class="big" id="round">1</div><span class="pill" id="connection">Connecting…</span></div>
+   <div><span class="muted">Points in shared pot</span><div class="big" id="pot">0</div></div>
+  </div>
+ </div>
+ <div class="grid">
+  <div class="team a card"><h2>🔵 Team A</h2><div id="teamA" class="muted">No players yet</div><button id="pickA" class="secondary">Join Team A</button></div>
+  <div class="team b card"><h2>🔴 Team B</h2><div id="teamB" class="muted">No players yet</div><button id="pickB" class="secondary">Join Team B</button></div>
+ </div>
+ <div class="card">
+  <h2>Your points</h2><div class="big" id="balance">—</div><p class="muted" id="myTeam">Choose a team to play.</p>
+  <label>Points to contribute</label><input id="contribution" type="number" min="1" step="1" value="100">
+  <button id="contributeBtn">Put points in pot</button>
+  <p id="message"></p>
+ </div>
+ <div class="card">
+  <h2>Players in this room</h2><div id="players"></div>
+ </div>
+ <div class="card" id="hostPanel">
+  <h2>Host controls</h2><p class="muted">Only the room creator can settle a round.</p>
+  <button id="winA">Team A wins</button><button id="winB">Team B wins</button>
+  <button id="nextRound" class="secondary hidden">Start next round</button>
+ </div>
+ <div class="card"><h2>Recent rounds</h2><ol id="history" class="history"><li class="muted">No completed rounds yet.</li></ol></div>
+ <button class="secondary" id="leaveBtn">Back to lobby</button>
+</section>
+<footer>Points are fictional and have no cash value. Room state is held by the game server and may reset if the server restarts.</footer>
+</main>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+const $ = id => document.getElementById(id);
+let roomCode = null, playerId = localStorage.getItem("twoTeamPlayerId") || crypto.randomUUID();
+let roomState = null;
+localStorage.setItem("twoTeamPlayerId", playerId);
+
+function say(text, good=false){$("message").textContent=text; $("message").className=good?"good":"";}
+function emitWithAck(event, data, done){
+  socket.emit(event, data, result => {
+    if (!result || result.error) say(result?.error || "Something went wrong.");
+    else { say(" "); if(done) done(result); }
+  });
+}
+function enterRoom(code){
+  roomCode=code;
+  $("lobby").classList.add("hidden"); $("game").classList.remove("hidden");
+  $("roomCode").textContent=code;
+}
+$("createBtn").onclick=()=>{
+  emitWithAck("createRoom",{name:$("createName").value,startingPoints:$("starting").value,playerId},r=>{
+    localStorage.setItem("twoTeamPlayerId",r.playerId); enterRoom(r.code);
+  });
+};
+$("joinBtn").onclick=()=>{
+  emitWithAck("joinRoom",{name:$("joinName").value,code:$("roomCodeInput").value,playerId},r=>{
+    localStorage.setItem("twoTeamPlayerId",r.playerId); enterRoom(r.code);
+  });
+};
+$("pickA").onclick=()=>emitWithAck("chooseTeam",{code:roomCode,team:"A"});
+$("pickB").onclick=()=>emitWithAck("chooseTeam",{code:roomCode,team:"B"});
+$("contributeBtn").onclick=()=>emitWithAck("contribute",{code:roomCode,amount:$("contribution").value});
+$("winA").onclick=()=>{if(confirm("Settle this round with Team A as the winner?"))emitWithAck("resolveRound",{code:roomCode,winner:"A"});};
+$("winB").onclick=()=>{if(confirm("Settle this round with Team B as the winner?"))emitWithAck("resolveRound",{code:roomCode,winner:"B"});};
+$("nextRound").onclick=()=>emitWithAck("nextRound",{code:roomCode});
+$("copyCode").onclick=async()=>{try{await navigator.clipboard.writeText(roomCode);say("Room code copied.",true);}catch(e){say("Your room code is "+roomCode,true);}};
+$("leaveBtn").onclick=()=>{roomCode=null;roomState=null;$("game").classList.add("hidden");$("lobby").classList.remove("hidden");say("");};
+
+socket.on("connect",()=>{$("connection").textContent="Connected";});
+socket.on("disconnect",()=>{$("connection").textContent="Reconnecting…";});
+socket.on("roomUpdate",state=>{
+  if(!roomCode || state.code!==roomCode)return;
+  roomState=state;
+  $("round").textContent=state.round;$("pot").textContent=state.pot.toLocaleString();
+  const me=state.players.find(p=>p.id===playerId);
+  if(me){$("balance").textContent=me.balance.toLocaleString();$("myTeam").textContent=me.team?"You are on Team "+me.team:"Choose a team to play."; }
+  const list=(team)=>state.players.filter(p=>p.team===team);
+  const renderTeam=(team,id)=>{const members=list(team);$(id).innerHTML=members.length?members.map(p=>`<div class="player"><span>${escapeHtml(p.name)}</span><b>${p.balance.toLocaleString()} pts</b></div>`).join(""):"No players yet";};
+  renderTeam("A","teamA");renderTeam("B","teamB");
+  $("players").innerHTML=state.players.map(p=>`<div class="player"><span>${escapeHtml(p.name)} ${p.id===state.hostId?"👑":""} <span class="pill">${p.team?"Team "+p.team:"Unassigned"}</span> ${p.online?"":"(offline)"}</span><b>${p.balance.toLocaleString()} pts</b></div>`).join("");
+  const isHost=playerId===state.hostId;
+  $("hostPanel").classList.toggle("hidden",!isHost);
+  $("winA").disabled=state.status!=="open"||state.pot===0;
+  $("winB").disabled=state.status!=="open"||state.pot===0;
+  $("nextRound").classList.toggle("hidden",!(isHost&&state.status==="settled"));
+  $("contributeBtn").disabled=state.status!=="open";
+  $("pickA").disabled=state.status!=="open";$("pickB").disabled=state.status!=="open";
+  $("history").innerHTML=state.history.length?state.history.slice().reverse().map(h=>`<li>Round ${h.round}: Team ${h.winner} won ${h.pot.toLocaleString()} points — ${h.winners.map(escapeHtml).join(", ")}</li>`).join(""):"<li class='muted'>No completed rounds yet.</li>";
+});
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+</script></body></html>
